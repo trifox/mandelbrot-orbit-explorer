@@ -1,0 +1,489 @@
+
+<!DOCTYPE html>
+<!--
+	Mandelbrot Iteration Visualization
+	Author: Stefan Bion
+	URL: http://www.stefanbion.de/fraktal-generator/mandeliteration.htm
+
+	This JavaScript program draws the path of the Z points on the Gaussian
+	number plane for a given C starting point and a number of iterations.
+
+	The source code may be used freely without any restrictions.
+-->
+<html>
+	<head>
+		<meta http-equiv="content-type" content="text/html; charset=ISO-8859-15">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<title>Visualization of the Mandelbrot iteration Z=Z²+C</title>
+
+		<style type="text/css">
+			body {
+				font-family:Arial,sans-serif;
+				font-size:12pt;
+			}
+			#frame {
+				position:relative;
+				display:inline-block;
+				outline:1px solid black;
+				cursor:crosshair;
+			}
+			#popupColors {
+				position:absolute;
+				z-index:4;
+				left:20px; top:70px;
+				display:none;
+				margin:0px 0px 0px 0px;
+				padding:10px 10px 0px 10px;
+				border:1px solid black;
+				background-color:#FFFFFF;
+			}
+			#canvasFg {
+				position:absolute;
+				z-index:3;
+			}
+			#canvasBg {
+				position:absolute;
+				z-index:2;
+			}
+			#canvasGrid {
+				position:absolute;
+				z-index:1;
+			}
+			#form {
+				padding-bottom:4px;
+			}
+			#form * {
+				padding:1px;
+			}
+		</style>
+
+		<script type="text/javascript">
+
+			"use strict";
+
+			// Global variables
+
+			// a) Parameters
+			var g_reMin = -2, g_reMax = 2, g_imMin = -2, g_imMax = 2, g_itMax = 200;   // Mandelbrot set
+			var g_imgWidth = 600, g_imgHeight = 600;
+			var g_drawMode = 1; // 1 = Lines, 2 = Dots, 3 = Julia set
+			var g_lineDistance = 0.1;   // Distance between the grey lines
+			var g_drawOutside = false; // Colorize the exterior of the Mandelbrot/Julia set
+			var g_colors =
+			{
+				grid: [ 192, 192, 192 ], axis: [ 0, 0, 255 ], circle: [ 255, 0, 255 ], mset: [0, 192, 0 ], jset: [ 255, 0, 0 ], orbit: [ 255, 0, 0 ], C: [ 0, 0, 255 ], Z: [ 0, 255, 255 ], 
+				cssColor: function(rgb) { return 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')'; },
+				htmlColor: function(rgb) { return '#' + ('00000' + (rgb[0] * 256 * 256 + rgb[1] * 256 + rgb[2]).toString(16)).substr(-6).toUpperCase(); },
+				setColor: function(rgb, html) { rgb[0] = parseInt(html.substr(1, 2), 16); rgb[1] = parseInt(html.substr(3, 2), 16); rgb[2] = parseInt(html.substr(5, 2), 16);  }
+			};
+
+			// b) Helper variables
+			var g_reDelta = g_reMax - g_reMin;   // Dimensions of the Gaussian number plane (real part)
+			var g_imDelta = g_imMax - g_imMin;   // Dimensions of the Gaussian number plane (imaginary part)
+			var g_xPosC, g_yPosC;   // Position of number C on canvas
+			var g_xPosZ, g_yPosZ;   // Position of number Z on canvas
+			var g_context, g_imgData; // canvas
+
+			function Init()
+			{
+				// Install event handlers
+				$('frame').addEventListener('mousemove', OnMouseMove, false);
+				$('frame').addEventListener('click', OnClick, false);
+
+				// Complete "View source code" link by URI (for Chrome und Opera)
+				$('srclink').href = 'view-source:' + location.href;
+
+				// Write values into form
+				$('imgWidth').value = g_imgWidth;
+				$('imgHeight').value = g_imgHeight;
+				$('itMax').value = g_itMax;
+				$('drawMode').value = g_drawMode;
+				$('drawOutside').checked = g_drawOutside;
+
+				InitColors();
+				InitCanvas(true);
+			}
+
+			function InitColors()
+			{
+				$('labelC1').style.color = $('labelC2').style.color = g_colors.cssColor(g_colors.C);
+				$('labelZ1').style.color = $('labelZ2').style.color = g_colors.cssColor(g_colors.Z);
+				$('labelM').style.color = g_colors.cssColor(g_colors.mset);
+			}
+
+			function GetColors()
+			{
+				$('colorGrid').value = g_colors.htmlColor(g_colors.grid);
+				$('colorAxis').value = g_colors.htmlColor(g_colors.axis);
+				$('colorCircle').value = g_colors.htmlColor(g_colors.circle);
+				$('colorMset').value = g_colors.htmlColor(g_colors.mset);
+				$('colorJset').value = g_colors.htmlColor(g_colors.jset);
+				$('colorOrbit').value = g_colors.htmlColor(g_colors.orbit);
+				$('colorC').value = g_colors.htmlColor(g_colors.C);
+				$('colorZ').value = g_colors.htmlColor(g_colors.Z);
+			}
+
+			function SetColors()
+			{
+				g_colors.setColor(g_colors.grid, $('colorGrid').value);
+				g_colors.setColor(g_colors.axis, $('colorAxis').value);
+				g_colors.setColor(g_colors.circle, $('colorCircle').value);
+				g_colors.setColor(g_colors.mset, $('colorMset').value);
+				g_colors.setColor(g_colors.jset, $('colorJset').value);
+				g_colors.setColor(g_colors.orbit, $('colorOrbit').value);
+				g_colors.setColor(g_colors.C, $('colorC').value);
+				g_colors.setColor(g_colors.Z, $('colorZ').value);
+
+				InitColors();
+				InitCanvas(true);
+			}
+
+			function InitCanvas(bForceUpdate)
+			{
+				if(!bForceUpdate)
+				{
+					// Read values from form
+					var imgWidth = parseInt($('imgWidth').value, 10);
+					var imgHeight = parseInt($('imgHeight').value, 10);
+					var itMax = parseInt($('itMax').value, 10);
+					g_drawMode = parseInt($('drawMode').value, 10);
+					var drawOutside = $('drawOutside').checked;
+
+					// If unchanged, do nothing
+					if(imgWidth === $('canvasGrid').width
+					&& imgHeight === $('canvasGrid').height 
+					&& itMax === g_itMax
+					&& drawOutside === g_drawOutside)
+						return;
+
+					// Store changed form values
+					g_imgWidth = imgWidth;
+					g_imgHeight = imgHeight;
+					g_itMax = itMax;
+					g_drawOutside = drawOutside;
+				}
+
+				// Set image size and erase image contents
+				$('frame').style.width = g_imgWidth + 'px';
+				$('frame').style.height = g_imgHeight + 'px';
+				$('canvasFg').width = $('canvasBg').width = $('canvasGrid').width = g_imgWidth;
+				$('canvasFg').height = $('canvasBg').height = $('canvasGrid').height = g_imgHeight;
+
+				// Adjust the aspect ratio of the Gaussian number plane to the aspect ratio of the image
+				var imgAspectRatio = g_imgWidth / g_imgWidth;
+				var objAspectRatio = (g_reMax - g_reMin) / (g_imMax - g_imMin);
+
+				if(imgAspectRatio > objAspectRatio)
+				{
+					var delta = ((g_imMax - g_imMin) * imgAspectRatio - (g_reMax - g_reMin)) / 2;
+					g_reMin -= delta;
+					g_reMax += delta;
+				}
+				else if(objAspectRatio > imgAspectRatio)
+				{
+					var delta = ((g_reMax - g_reMin) / imgAspectRatio - (g_imMax - g_imMin)) / 2;
+					g_imMin -= delta;
+					g_imMax += delta;
+				}
+
+				// Initialize grid canvas
+				g_context = $('canvasGrid').getContext('2d');
+				g_imgData = g_context.getImageData(0, 0, g_imgWidth, g_imgHeight);
+
+				// Draw the grid
+				for (var x = 0; x < g_reMax; x += g_lineDistance)
+				{
+					var xPos = Math.round((x - g_reMin) * g_imgWidth / g_reDelta);
+					g_context.beginPath();
+					g_context.strokeStyle = x == 0 ? g_colors.cssColor(g_colors.axis) : g_colors.cssColor(g_colors.grid);
+					g_context.moveTo(xPos + 0.5, 0);
+					g_context.lineTo(xPos + 0.5, g_imgHeight);
+					g_context.stroke();
+				}
+				for (var x = 0; x > g_reMin; x -= g_lineDistance)
+				{
+					var xPos = Math.round((x - g_reMin) * g_imgWidth / g_reDelta);
+					g_context.beginPath();
+					g_context.strokeStyle = x == 0 ? g_colors.cssColor(g_colors.axis) : g_colors.cssColor(g_colors.grid);
+					g_context.moveTo(xPos + 0.5, 0);
+					g_context.lineTo(xPos + 0.5, g_imgHeight);
+					g_context.stroke();
+				}
+				for (var y = 0; y < g_imMax; y += g_lineDistance)
+				{
+					var yPos = Math.round((g_imMax - y) * g_imgHeight / g_imDelta);
+					g_context.beginPath();
+					g_context.strokeStyle = y == 0 ? g_colors.cssColor(g_colors.axis) : g_colors.cssColor(g_colors.grid);
+					g_context.moveTo(0, yPos + 0.5);
+					g_context.lineTo(g_imgWidth, yPos + 0.5);
+					g_context.stroke();
+				}
+				for (var y = 0; y > g_imMin; y -= g_lineDistance)
+				{
+					var yPos = Math.round((g_imMax - y) * g_imgHeight / g_imDelta);
+					g_context.beginPath();
+					g_context.strokeStyle = y == 0 ? g_colors.cssColor(g_colors.axis) : g_colors.cssColor(g_colors.grid);
+					g_context.moveTo(0, yPos + 0.5);
+					g_context.lineTo(g_imgWidth, yPos + 0.5);
+					g_context.stroke();
+				}
+
+				// Draw circle with "escape radius" of 2
+				var xPos0 = -g_reMin * g_imgWidth / g_reDelta;
+				var yPos0 = g_imMax * g_imgHeight / g_imDelta;
+				var escapeRadius = 2 * g_imgWidth / g_reDelta;
+				g_context.beginPath();
+				g_context.strokeStyle = g_colors.cssColor(g_colors.circle);
+				g_context.arc(xPos0, yPos0, escapeRadius, 0, 2 * Math.PI);
+				g_context.stroke();
+
+				// Initialize background canvas
+				g_context = $('canvasBg').getContext('2d');
+				g_imgData = g_context.getImageData(0, 0, g_imgWidth, g_imgHeight);
+
+				// Draw Mandelbrot set
+				for (var yPos = 0, iData = 0; yPos < g_imgHeight; yPos++)
+				{
+					var y = g_imMax - yPos * g_imDelta / g_imgHeight;
+					for (var xPos = 0; xPos < g_imgWidth; xPos++)
+					{
+						var x = g_reMin + xPos * g_reDelta / g_imgWidth;
+
+						// Mandelbrot iteration (Z=Z²+C)
+						var a = 0, b = 0, a2 = 0, b2 = 0, it = 0;
+						while (it < g_itMax && a2 + b2 < 4)
+						{
+							b = 2 * a * b + y;
+							a = a2 - b2 + x;
+
+							a2 = a * a;
+							b2 = b * b;
+
+							it++;
+						}
+
+						g_imgData.data[iData++] = g_colors.mset[0]; // red
+						g_imgData.data[iData++] = g_colors.mset[1]; // green
+						g_imgData.data[iData++] = g_colors.mset[2]; // blue
+						g_imgData.data[iData++] = it == g_itMax ? 128 : g_drawOutside ? (it % 2) ? 0 : 64 : 0; // alpha
+					}
+				}
+				g_context.putImageData(g_imgData, 0, 0);
+
+				// Initialize foreground canvas
+				g_context = $('canvasFg').getContext('2d');
+				g_imgData = g_context.getImageData(0, 0, g_imgWidth, g_imgHeight);
+			}
+
+			function OnMouseMove(event)
+			{
+				// Globally remember image point
+				g_xPosC = event.offsetX;
+				g_yPosC = event.offsetY;
+
+				// Real and imaginary part of rhe complex number C
+				var x = g_reMin + g_xPosC * g_reDelta / g_imgWidth;
+				var y = g_imMax - g_yPosC * g_imDelta / g_imgHeight;
+
+				// Update legend
+				$('C1').innerHTML = ReImToString(x, y);
+
+				// Draw if left mouse button is pressed
+				if(event.buttons & 1)
+					OnClick(event);
+			}
+
+			function OnClick(event)
+			{
+				InitCanvas(false);
+
+				if(g_drawMode === 3)
+					DrawJulia();
+				else
+					DrawOrbits();
+			}
+
+			function DrawJulia()
+			{
+				$('displayZ').style.display = 'none';
+
+				g_context.clearRect(0, 0, g_imgWidth, g_imgHeight);
+
+				// Real and imaginary part of the complex number C
+				var x = g_reMin + g_xPosC * g_reDelta / g_imgWidth;
+				var y = g_imMax - g_yPosC * g_imDelta / g_imgHeight;
+
+				// Mandelbrot iteration (Z=Z²+C)
+				for (var yPos = 0, iData = 0; yPos < g_imgHeight; yPos++)
+				{
+					for (var xPos = 0; xPos < g_imgWidth; xPos++)
+					{
+						var b = g_imMax - yPos * g_imDelta / g_imgHeight;
+						var a = g_reMin + xPos * g_reDelta / g_imgWidth;
+
+						var a2 = a * a, b2 = b * b, it = 0;
+
+						// Mandelbrot iteration (Z=Z²+C)
+						while (it < g_itMax && a2 + b2 < 4)
+						{
+							b = 2 * a * b + y;
+							a = a2 - b2 + x;
+
+							a2 = a * a;
+							b2 = b * b;
+
+							it++;
+						}
+
+						g_imgData.data[iData++] = g_colors.jset[0]; // red
+						g_imgData.data[iData++] = g_colors.jset[1]; // green
+						g_imgData.data[iData++] = g_colors.jset[2]; // blue
+						g_imgData.data[iData++] = it == g_itMax ? 128 : g_drawOutside ? (it % 2) ? 0 : 64 : 0; // alpha
+					}
+				}
+				g_context.putImageData(g_imgData, 0, 0);
+
+				// Draw point C (blue)
+				g_context.beginPath();
+				g_context.fillStyle = g_colors.cssColor(g_colors.C);
+				g_context.arc(g_xPosC, g_yPosC, 3, 0, 2 * Math.PI);
+				g_context.fill();
+
+				// Update legend
+				$('C').innerHTML = ReImToString(x, y);
+			}
+
+			function DrawOrbits()
+			{
+				$('displayZ').style.display = 'inline';
+
+				g_context.clearRect(0, 0, g_imgWidth, g_imgHeight);
+
+				// Real and imaginary part of rhe complex number C
+				var x = g_reMin + g_xPosC * g_reDelta / g_imgWidth;
+				var y = g_imMax - g_yPosC * g_imDelta / g_imgHeight;
+
+				// Mandelbrot iteration (Z=Z²+C)
+				var a = 0, b = 0, a2 = 0, b2 = 0, it = 0;
+				LineTo(a, b, it); // set starting point Z = 0
+				while (it < g_itMax && a2 + b2 < 4)
+				{
+					b = 2 * a * b + y;
+					a = a2 - b2 + x;
+
+					a2 = a * a;
+					b2 = b * b;
+
+					it++;
+
+					LineTo(a, b, it); // Draw line to current point Z
+				}
+
+				// Draw entire path of point Z (red)
+				if(g_drawMode === 1) g_context.stroke();
+
+				// Draw point C
+				g_context.beginPath();
+				g_context.fillStyle = g_colors.cssColor(g_colors.C);
+				g_context.arc(g_xPosC, g_yPosC, 3, 0, 2 * Math.PI);
+				g_context.fill();
+
+				// Draw point Z
+				g_context.beginPath();
+				g_context.fillStyle = g_colors.cssColor(g_colors.Z);
+				g_context.arc(g_xPosZ, g_yPosZ, 3, 0, 2 * Math.PI);
+				g_context.fill();
+
+				// Update legend
+				$('it').innerHTML = it;
+				$('M').innerHTML = it == g_itMax ? '&isin;' : '&notin;';
+				$('C').innerHTML = ReImToString(x, y);
+				$('Z').innerHTML = ReImToString(a, b);
+				$('absZ').innerHTML = Math.sqrt(a*a + b*b).toFixed(3).replace('.', ',');
+			}
+
+			function LineTo(a, b, it)
+			{
+				g_xPosZ = (a - g_reMin) * g_imgWidth / g_reDelta;
+				g_yPosZ = (g_imMax - b) * g_imgHeight / g_imDelta;
+
+				if(it === 0)
+				{
+					if(g_drawMode === 1)
+					{
+						g_context.beginPath();
+						g_context.strokeStyle = g_colors.cssColor(g_colors.orbit);
+						g_context.moveTo(g_xPosZ, g_yPosZ);
+					}
+				}
+				else
+				{
+					if(g_drawMode === 1)
+						g_context.lineTo(g_xPosZ, g_yPosZ);
+					else if(g_drawMode === 2)
+					{
+						g_context.beginPath();
+						g_context.fillStyle = g_colors.cssColor(g_colors.orbit);
+						g_context.arc(g_xPosZ, g_yPosZ, 3, 0, 2 * Math.PI);
+						g_context.fill();
+					}
+				}
+			}
+
+			function ReImToString(a, b)
+			{
+				var s = a.toFixed(3).replace('.', ',') + '+' + b.toFixed(3).replace('.', ',') + 'i';
+				s = s.replace('+-', '&minus;');
+				s = s.replace('-', '&minus;');
+				return s;
+			}
+
+			function $(id)
+			{
+				return document.getElementById(id);
+			}
+
+		</script>
+	</head>
+
+	<body onload="Init();">
+		<b>Visualization of the Mandelbrot iteration Z=Z²+C</b> &nbsp;
+		[<a href="" onclick="GetColors(); $('popupColors').style.display = 'inline-block'; return false;">Colors</a>]
+		[<a id="srclink" href="view-source:mandeliteration.htm" target="_blank" rel="noopener">View source code</a></a>]
+		<form id="form">
+			Size:<input id="imgWidth" type="text" style="width:30px;" title="Image width (pixel)">&times;<input id="imgHeight" type="text" style="width:30px;" title="Image height (pixel)">
+			Iterations:<input id="itMax" type="text" style="width:40px;" title="Maximum number of iterations">
+			Draw:<select id="drawMode"><option value="1">Lines</option><option value="2">Dots</option><option value="3">Julia set</option></select>
+			Outside:<input id="drawOutside" type="checkbox" title="Colorize the exterior of the Mandelbrot/Julia set">
+			C = <span id="C1">x + yi</span>
+		</form>
+		<div id="frame">
+			<canvas id="canvasFg"></canvas>
+			<canvas id="canvasBg"></canvas>
+			<canvas id="canvasGrid"></canvas>
+		</div><br>
+		Usage: Left-click on above image or move mouse with left button pressed.<br>
+		<b id="labelC1">C</b> = <span id="C">x + yi</span>
+		<span id="displayZ">
+			&bull; <b id="labelZ1">Z</b> = <span id="Z">a + bi</span>
+			&bull; |<b id="labelZ2">Z</b>| = <span id="absZ">???</span>
+			&bull; Iterations: <b><span id="it">???</span></b>
+			&bull; <b id="labelC2">C</b> <span id="M" style="line-height:0;">&isin;</span> <b id="labelM">M</b>
+		</span>
+		<div id="popupColors">
+			<table>
+				<tr><td>Grid</td><td><input id="colorGrid" type="color" onchange="SetColors()"></td></tr>
+				<tr><td>Axis</td><td><input id="colorAxis" type="color" onchange="SetColors()"></td></tr>
+				<tr><td>Circle</td><td><input id="colorCircle" type="color" onchange="SetColors()"></td></tr>
+				<tr><td>Mandelbrot set</td><td><input id="colorMset" type="color" onchange="SetColors()"></td></tr>
+				<tr><td>Julia set</td><td><input id="colorJset" type="color" onchange="SetColors()"></td></tr>
+				<tr><td>Z path</td><td><input id="colorOrbit" type="color" onchange="SetColors()"></td></tr>
+				<tr><td>C point</td><td><input id="colorC" type="color" onchange="SetColors()"></td></tr>
+				<tr><td>Z point</td><td><input id="colorZ" type="color" onchange="SetColors()"></td></tr>
+			</table>
+			<p align="center">
+				<input type="button" value="Close" onclick="$('popupColors').style.display = 'none';">
+			</p>
+		</div>
+	</body>
+</html>
